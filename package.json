@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "gateway": "tsx src/gateway/index.ts",
+  "agent": "tsx src/agent/index.ts"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
