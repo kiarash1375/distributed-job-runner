@@ -1,0 +1,2 @@
+- Gateway restart: killed process, jobs still PENDING on restart. State is in Postgres, not memory.
+- Postgres restart: docker compose restart postgres; jobs survived (named volume). Gateway did not crash.
