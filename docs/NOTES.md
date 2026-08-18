@@ -82,6 +82,41 @@ curl localhost:8080/jobs
 
 ---
 
+### Live log streaming
+
+Submitted a job printing one line per second for ten seconds and attached to the
+SSE stream while it ran. Lines appeared incrementally rather than in a single
+batch at the end.
+
+The stream replays whatever is already stored in `job_log_chunks` before
+subscribing to live output, so a viewer attaching mid-job sees the output from the
+beginning and then continues live. A viewer attaching to an already-terminal job
+gets the full log and an immediate close.
+
+```bash
+JOB_ID=$(curl -s -X POST localhost:8080/jobs -H "Content-Type: application/json" \
+  -d '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","for i in 1 2 3 4 5 6 7 8 9 10; do echo line $i; sleep 1; done"],"timeoutSeconds":60,"idempotencyKey":"stream-1"}' \
+  | grep -o '"jobId":"[^"]*"' | cut -d'"' -f4)
+
+curl -N localhost:8080/jobs/$JOB_ID/logs/stream
+```
+
+### Live viewer disconnecting does not affect the job
+
+Killed the streaming client mid-job with Ctrl+C. The job continued to completion
+and the final log was complete when fetched afterwards.
+
+Live delivery and durable storage are separate paths: the agent sends each chunk
+once, the gateway publishes it to any in-memory subscribers and independently
+writes it to Postgres. With no subscribers the publish step does nothing at all,
+so an unwatched job costs nothing on the live path.
+
+```bash
+# with the stream above running, press Ctrl+C, then:
+curl localhost:8080/jobs/$JOB_ID          # SUCCEEDED
+curl localhost:8080/jobs/$JOB_ID/logs     # full log intact
+```
+
 ## Decisions and trade-offs
 
 ### Gateway fails fast on startup
@@ -121,6 +156,24 @@ requires satisfying the type checker constantly, which is expensive while learni
 the language. Would enable it for anything longer-lived.
 
 ---
+
+### Backpressure: drop the viewer, protect the pipeline
+
+If writing to a live subscriber fails, that subscriber is removed rather than
+retried or buffered. A slow or dead viewer must never block job execution or the
+other viewers.
+
+Nothing is actually lost: the durable path already holds every chunk, so a dropped
+viewer can fetch the complete log afterwards. The alternative — buffering per
+subscriber — trades unbounded memory growth for a marginally better live
+experience, which is the wrong trade when a complete log is one request away.
+
+### SSE rather than WebSocket for live logs
+
+The viewer never sends anything, so a one-directional transport fits. SSE runs over
+plain HTTP, works with `curl`, and reconnects automatically in browsers without a
+client library. A WebSocket would work but adds bidirectionality that this path has
+no use for.
 
 ## Known gaps
 
@@ -173,6 +226,15 @@ per-agent queue that any instance can publish to. This is the strongest argument
 for introducing a broker, which is otherwise unnecessary at this scale.
 
 ---
+
+### Replay/subscribe race in the log stream
+
+The SSE endpoint queries stored chunks and then subscribes to live output. A chunk
+arriving between those two operations would be missed by that viewer.
+
+Fix: subscribe first and buffer, then replay stored chunks and de-duplicate against
+the buffer by sequence number. The final log is unaffected — this only affects what
+a single live viewer sees.
 
 ## Environment problems hit during setup
 
