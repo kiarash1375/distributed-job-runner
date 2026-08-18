@@ -3,6 +3,10 @@ import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { pool } from "./db";
 import { createJob, getJob, listJobs } from "./jobs-repo";
+import { attachAgentHub } from "./agent-hub";
+import { deliverPendingJobs } from "./agent-hub";
+import { isAgentConnected, listConnectedAgents } from "./agent-registry";
+import { getFullLog } from "./logs-repo";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,6 +39,10 @@ app.post("/jobs", async (request, reply) => {
     idempotencyKey: body.idempotencyKey,
     metadata: body.metadata,
   });
+
+  if (created && isAgentConnected(job.agent_id)) {
+    deliverPendingJobs(job.agent_id).catch(() => {});
+  }
 
   return reply.code(created ? 202 : 200).send({
     jobId: job.id,
@@ -92,11 +100,28 @@ app.get("/jobs", async (request) => {
   return { jobs: jobs.map((j) => ({ jobId: j.id, agentId: j.agent_id, status: j.status })) };
 });
 
+app.get("/agents", async () => {
+  return { agents: listConnectedAgents() };
+});
+
+app.get("/jobs/:id/logs", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  if (!UUID_PATTERN.test(id)) {
+    return reply.code(400).send({ error: "invalid job id format" });
+  }
+  const job = await getJob(id);
+  if (!job) return reply.code(404).send({ error: "job not found" });
+
+  const log = await getFullLog(id);
+  return reply.type("text/plain").send(log);
+});
+
 async function start() {
   try {
     await pool.query("SELECT 1");
     logger.info("database connection verified");
     await app.listen({ port: config.gatewayPort, host: "0.0.0.0" });
+    attachAgentHub(app.server);
     logger.info({ port: config.gatewayPort }, "gateway listening");
   } catch (err: any) {
     logger.error({ err: err.message }, "gateway failed to start");
