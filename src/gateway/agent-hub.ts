@@ -10,6 +10,7 @@ import {
 } from "./agent-registry";
 import { findPendingJobsForAgent, transitionJob } from "./jobs-repo";
 import { appendLogChunk } from "./logs-repo";
+import { publish, publishEnd } from "./log-stream";
 
 export function attachAgentHub(server: Server): void {
   const wss = new WebSocketServer({ server, path: "/agent" });
@@ -72,6 +73,7 @@ async function handleAgentMessage(agentId: string, msg: any, log: any) {
       return;
 
     case "JOB_LOG":
+      publish(msg.jobId, msg.content);
       await appendLogChunk(msg.jobId, msg.seq, msg.stream, msg.content);
       return;
 
@@ -86,6 +88,7 @@ async function handleAgentMessage(agentId: string, msg: any, log: any) {
         exitCode: msg.exitCode,
         errorMessage: msg.errorMessage ?? null,
       });
+      publishEnd(msg.jobId, status);
       return;
     }
 

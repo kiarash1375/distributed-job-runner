@@ -7,6 +7,9 @@ import { attachAgentHub } from "./agent-hub";
 import { deliverPendingJobs } from "./agent-hub";
 import { isAgentConnected, listConnectedAgents } from "./agent-registry";
 import { getFullLog } from "./logs-repo";
+import { subscribe } from "./log-stream";
+import { getFullLog } from "./logs-repo";
+import { isTerminal } from "../shared/types";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -114,6 +117,55 @@ app.get("/jobs/:id/logs", async (request, reply) => {
 
   const log = await getFullLog(id);
   return reply.type("text/plain").send(log);
+});
+
+app.get("/jobs/:id/logs/stream", async (request, reply) => {
+  const { id } = request.params as { id: string };
+
+  if (!UUID_PATTERN.test(id)) {
+    return reply.code(400).send({ error: "invalid job id format" });
+  }
+
+  const job = await getJob(id);
+  if (!job) return reply.code(404).send({ error: "job not found" });
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  const send = (chunk: string) => {
+    for (const line of chunk.split("\n")) {
+      reply.raw.write(`data: ${line}\n`);
+    }
+    reply.raw.write("\n");
+  };
+
+  const existing = await getFullLog(id);
+  if (existing.length > 0) send(existing);
+
+  if (isTerminal(job.status)) {
+    reply.raw.write(`data: --- job ${job.status} ---\n\n`);
+    reply.raw.end();
+    return;
+  }
+
+  const unsubscribe = subscribe(id, {
+    write: send,
+    dropped: 0,
+  });
+
+  const keepAlive = setInterval(() => {
+    try {
+      reply.raw.write(": keep-alive\n\n");
+    } catch {}
+  }, 15000);
+
+  request.raw.on("close", () => {
+    clearInterval(keepAlive);
+    unsubscribe();
+  });
 });
 
 async function start() {
