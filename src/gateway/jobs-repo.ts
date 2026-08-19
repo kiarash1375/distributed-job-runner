@@ -155,3 +155,13 @@ export async function transitionJob(
     client.release();
   }
 }
+
+export async function findActiveJobsForAgent(agentId: string): Promise<Job[]> {
+  const result = await pool.query(
+    `SELECT * FROM jobs
+      WHERE agent_id = $1 AND status IN ('DISPATCHED', 'RUNNING')
+      ORDER BY created_at ASC`,
+    [agentId]
+  );
+  return result.rows;
+}

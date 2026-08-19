@@ -271,3 +271,41 @@ Fix: read from `container.logs` with `follow: true` after starting the container
 That call reads from the beginning of the output, so nothing is lost regardless of
 how briefly the container lives. Parsing the frame headers there also gave us the
 stdout/stderr distinction for free.
+
+### False success from a container that never started
+
+If the agent was killed between `createContainer` and `container.start`, the
+container existed in Docker's `created` state. Reconciliation only checked for
+`running` and treated everything else as finished, and `inspect` on a
+never-started container reports `ExitCode: 0` — so the agent reported success for
+a job that never executed.
+
+The gateway rejected the report, because `DISPATCHED -> SUCCEEDED` is not a legal
+transition: a job that never reached RUNNING cannot succeed. The state machine
+prevented a false success from being recorded. However, the job was then stuck in
+DISPATCHED with nothing to move it.
+
+Fix: reconciliation now handles `created` explicitly. The container is removed and
+the job is released back to PENDING for redelivery, using the `DISPATCHED ->
+PENDING` transition that exists for exactly this case. Redelivery is safe here
+because we know the container never ran.
+
+### Agent killed before the container existed
+
+Killing the agent while the image was still being pulled left an active job in the
+database with no container in Docker. Reconciliation reported it as FAILED with
+exit code -1.
+
+That was wrong in the same way as the previous bug, inverted: we recorded a
+definite failure for work that had definitely never started. The task's own
+distinction applies — "no result received" is not "definite execution failure."
+
+Fix: a missing container for an active job now releases the job back to PENDING
+for redelivery, the same path as a created-but-never-started container.
+Redelivery is safe because we know nothing ran.
+
+Deliberately not covered: if a container disappears while the job is RUNNING, the
+release is rejected by the state machine and the job stays stuck in RUNNING. This
+is intentional — at that point we genuinely do not know whether the work ran, and
+a stuck job a human investigates is safer than a silent re-execution that might
+duplicate side effects.

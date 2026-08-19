@@ -11,6 +11,8 @@ import {
 import { findPendingJobsForAgent, transitionJob } from "./jobs-repo";
 import { appendLogChunk } from "./logs-repo";
 import { publish, publishEnd } from "./log-stream";
+import { findActiveJobsForAgent } from "./jobs-repo";
+
 
 export function attachAgentHub(server: Server): void {
   const wss = new WebSocketServer({ server, path: "/agent" });
@@ -89,6 +91,30 @@ async function handleAgentMessage(agentId: string, msg: any, log: any) {
         errorMessage: msg.errorMessage ?? null,
       });
       publishEnd(msg.jobId, status);
+      return;
+    }
+
+    case "RECONCILE_REQUEST": {
+      const active = await findActiveJobsForAgent(agentId);
+      sendToAgent(agentId, {
+        type: "RECONCILE_RESPONSE",
+        jobs: active.map((j) => ({
+          id: j.id,
+          status: j.status,
+          containerId: j.container_id,
+          timeoutSeconds: j.timeout_seconds,
+        })),
+      });
+      log.info({ count: active.length }, "sent reconcile response");
+      return;
+    }
+
+    case "JOB_RELEASE":{
+      await transitionJob(msg.jobId, "PENDING", {
+        reason: "agent restarted before container start",
+      });
+      await deliverPendingJobs(agentId);
+      log.info({ jobId: msg.jobId }, "job released back to pending");
       return;
     }
 
