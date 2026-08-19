@@ -76,20 +76,35 @@ async function runJob(job: any): Promise<void> {
     running.set(job.id, { containerId: container.id, timer: null as any });
     send({ type: "JOB_RUNNING", jobId: job.id, containerId: container.id });
 
-    const stream = await container.attach({
-      stream: true,
+        await container.start();
+
+    const stream: any = await container.logs({
+      follow: true,
       stdout: true,
       stderr: true,
     });
 
     stream.on("data", (chunk: Buffer) => {
-      const content = chunk.slice(8).toString("utf8");
-      if (content.length > 0) {
-        send({ type: "JOB_LOG", jobId: job.id, seq: seq++, stream: "stdout", content });
+      let offset = 0;
+      while (offset + 8 <= chunk.length) {
+        const streamType = chunk[offset] === 2 ? "stderr" : "stdout";
+        const length = chunk.readUInt32BE(offset + 4);
+        const content = chunk
+          .slice(offset + 8, offset + 8 + length)
+          .toString("utf8");
+        if (content.length > 0) {
+          send({
+            type: "JOB_LOG",
+            jobId: job.id,
+            seq: seq++,
+            stream: streamType,
+            content,
+          });
+        }
+        offset += 8 + length;
       }
     });
 
-    await container.start();
     jobLog.info({ containerId: container.id }, "container started");
 
     const timer = setTimeout(async () => {

@@ -117,6 +117,21 @@ curl localhost:8080/jobs/$JOB_ID          # SUCCEEDED
 curl localhost:8080/jobs/$JOB_ID/logs     # full log intact
 ```
 
+### stdout and stderr are distinguished
+
+Each frame in Docker's log stream carries an 8-byte header whose first byte
+identifies the source stream. The agent parses the header and stores the correct
+value in the `stream` column of `job_log_chunks`.
+
+```bash
+JOB_ID=$(curl -s -X POST localhost:8080/jobs -H "Content-Type: application/json" \
+  -d '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","echo to stdout; echo to stderr >&2"],"idempotencyKey":"streams-1"}' \
+  | grep -o '"jobId":"[^"]*"' | cut -d'"' -f4)
+
+docker compose exec postgres psql -U jobrunner -d jobrunner \
+  -c "SELECT seq, stream, content FROM job_log_chunks WHERE job_id = '$JOB_ID' ORDER BY seq"
+```
+
 ## Decisions and trade-offs
 
 ### Gateway fails fast on startup
@@ -209,12 +224,6 @@ it, and resend on reconnect. The `job_log_chunks` table already handles duplicat
 delivery via `ON CONFLICT DO NOTHING`; results would need equivalent handling,
 which the state machine's terminal-state rule mostly provides already.
 
-### stdout and stderr are not distinguished
-
-Docker's attach stream multiplexes both, with a header byte identifying which. The
-agent currently strips the 8-byte header and labels everything `stdout`. The
-`job_log_chunks` table has a `stream` column ready for the correct value.
-
 ### Single gateway instance assumed
 
 Agent sockets live in the memory of one gateway process. With several gateway
@@ -244,3 +253,21 @@ a single live viewer sees.
   `~/.docker/config.json` that Linux cannot execute. Fixed by emptying the file.
 - DNS resolution inside WSL failed (`Temporary failure resolving`); fixed by
   writing a static `/etc/resolv.conf` and disabling WSL's auto-generation.
+
+## Bugs found and fixed
+
+### Output from short-lived jobs was lost
+
+The first implementation attached to the container with `container.attach` before
+calling `container.start`. Attaching is asynchronous, so for containers that
+finished in a few hundred milliseconds the data handlers were wired up after the
+process had already exited, and the entire output was lost. Long-running jobs were
+unaffected, which is why the bug did not show up in the initial tests.
+
+Observed with a job that ran for 27ms: the state machine reported SUCCEEDED
+correctly, but the stored log was empty.
+
+Fix: read from `container.logs` with `follow: true` after starting the container.
+That call reads from the beginning of the output, so nothing is lost regardless of
+how briefly the container lives. Parsing the frame headers there also gave us the
+stdout/stderr distinction for free.
