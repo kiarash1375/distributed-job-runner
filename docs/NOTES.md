@@ -80,8 +80,6 @@ docker compose restart postgres
 curl localhost:8080/jobs
 ```
 
----
-
 ### Live log streaming
 
 Submitted a job printing one line per second for ten seconds and attached to the
@@ -132,6 +130,33 @@ docker compose exec postgres psql -U jobrunner -d jobrunner \
   -c "SELECT seq, stream, content FROM job_log_chunks WHERE job_id = '$JOB_ID' ORDER BY seq"
 ```
 
+### Structured logging and correlationId
+
+All logs are JSON via pino. Each job gets a child logger carrying `jobId` and
+`agentId`, so every message from it includes those fields automatically.
+
+Log messages are deliberately constant, with context in fields: all three
+transitions of a job share the message "job transitioned" and differ in `from`
+and `to`. This makes them filterable — all transitions, or only those reaching
+FAILED — which searching free text would not.
+
+`POST /jobs` accepts an `X-Correlation-Id` header and generates one if absent.
+It is logged at submission and stored in the job's metadata, so a single user
+request can be traced from submission to result. Reading an inbound header rather
+than always generating a fresh id means a trace id from an upstream caller is
+preserved rather than broken.
+
+```bash
+curl -s -X POST localhost:8080/jobs -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: my-trace-123" \
+  -d '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","echo traced"],"idempotencyKey":"corr-1"}'
+
+# the correlationId appears in the gateway log and in the job's metadata
+curl localhost:8080/jobs/<id>
+```
+
+---
+
 ## Decisions and trade-offs
 
 ### Gateway fails fast on startup
@@ -164,14 +189,6 @@ recovery impossible.
 
 Cost: containers accumulate and need explicit cleanup.
 
-### TypeScript with strict mode off
-
-Deliberate concession to the time budget. Strict mode catches more bugs but
-requires satisfying the type checker constantly, which is expensive while learning
-the language. Would enable it for anything longer-lived.
-
----
-
 ### Backpressure: drop the viewer, protect the pipeline
 
 If writing to a live subscriber fails, that subscriber is removed rather than
@@ -189,6 +206,14 @@ The viewer never sends anything, so a one-directional transport fits. SSE runs o
 plain HTTP, works with `curl`, and reconnects automatically in browsers without a
 client library. A WebSocket would work but adds bidirectionality that this path has
 no use for.
+
+### TypeScript with strict mode off
+
+Deliberate concession to the time budget. Strict mode catches more bugs but
+requires satisfying the type checker constantly, which is expensive while learning
+the language. Would enable it for anything longer-lived.
+
+---
 
 ## Known gaps
 
@@ -234,8 +259,6 @@ Fix: a shared pub/sub layer between gateway instances, or a message broker with 
 per-agent queue that any instance can publish to. This is the strongest argument
 for introducing a broker, which is otherwise unnecessary at this scale.
 
----
-
 ### Replay/subscribe race in the log stream
 
 The SSE endpoint queries stored chunks and then subscribes to live output. A chunk
@@ -245,14 +268,16 @@ Fix: subscribe first and buffer, then replay stored chunks and de-duplicate agai
 the buffer by sequence number. The final log is unaffected — this only affects what
 a single live viewer sees.
 
-## Environment problems hit during setup
+### Log chunk sequence continuity after recovery
 
-- WSL2 install failed with `0x80370102` until virtualization was enabled in BIOS.
-- Docker CLI inside WSL failed with `docker-credential-desktop.exe: exec format
-  error` — Docker Desktop writes a Windows credential helper path into
-  `~/.docker/config.json` that Linux cannot execute. Fixed by emptying the file.
-- DNS resolution inside WSL failed (`Temporary failure resolving`); fixed by
-  writing a static `/etc/resolv.conf` and disabling WSL's auto-generation.
+During reconciliation the log chunk sequence restarts from zero and collides with
+chunks already stored. Because of `ON CONFLICT DO NOTHING` those chunks are
+silently discarded, so the log of a recovered job may be incomplete.
+
+Fix: the gateway should include the highest stored sequence number per job in its
+reconcile response so the agent can continue numbering from there.
+
+---
 
 ## Bugs found and fixed
 
@@ -330,3 +355,14 @@ tags — the same job should produce the same environment every time — and wro
 mutable tags like `latest`, which is a further argument for pinning. A production
 system would expose this as a per-job pull policy, as Kubernetes does with
 Always / IfNotPresent / Never.
+
+---
+
+## Environment problems hit during setup
+
+- WSL2 install failed with `0x80370102` until virtualization was enabled in BIOS.
+- Docker CLI inside WSL failed with `docker-credential-desktop.exe: exec format
+  error` — Docker Desktop writes a Windows credential helper path into
+  `~/.docker/config.json` that Linux cannot execute. Fixed by emptying the file.
+- DNS resolution inside WSL failed (`Temporary failure resolving`); fixed by
+  writing a static `/etc/resolv.conf` and disabling WSL's auto-generation.

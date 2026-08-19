@@ -10,6 +10,7 @@ import { getFullLog } from "./logs-repo";
 import { subscribe } from "./log-stream";
 import { getFullLog } from "./logs-repo";
 import { isTerminal } from "../shared/types";
+import { randomUUID } from "crypto";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,14 +35,23 @@ app.post("/jobs", async (request, reply) => {
     return reply.code(400).send({ error: "command must be a non-empty array" });
   }
 
+  const correlationId = (request.headers["x-correlation-id"] as string) ?? randomUUID();
+
+  const metadata = { ...(body.metadata ?? {}), correlationId };
+
   const { job, created } = await createJob({
     agentId: body.agentId,
     image: body.image,
     command: body.command,
     timeoutSeconds: body.timeoutSeconds,
     idempotencyKey: body.idempotencyKey,
-    metadata: body.metadata,
+    metadata: metadata,
   });
+
+  logger.info(
+    { correlationId, jobId: job.id, agentId: job.agent_id, duplicate: !created },
+    "job submitted"
+  );
 
   if (created && isAgentConnected(job.agent_id)) {
     deliverPendingJobs(job.agent_id).catch(() => {});
@@ -69,6 +79,8 @@ app.get("/jobs/:id", async (request, reply) => {
     agentId: job.agent_id,
     image: job.image,
     command: job.command,
+    timeoutSeconds: job.timeout_seconds,
+    metadata: job.metadata,
     status: job.status,
     createdAt: job.created_at,
     updatedAt: job.updated_at,

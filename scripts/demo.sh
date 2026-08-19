@@ -5,6 +5,12 @@ set -e
 
 GW=${GATEWAY_URL:-http://localhost:8080}
 
+if ! curl -sf "$GW/health" > /dev/null; then
+  echo "ERROR: gateway is not reachable at $GW"
+  echo "Start it with: npm run gateway"
+  exit 1
+fi
+
 submit() {
   curl -s -X POST "$GW/jobs" -H "Content-Type: application/json" -d "$1"
 }

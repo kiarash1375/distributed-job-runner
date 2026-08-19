@@ -146,7 +146,7 @@ export async function transitionJob(
     );
 
     await client.query("COMMIT");
-    logger.info({ jobId, from, to }, "job transitioned");
+    logger.info({ jobId, from, to, ...detail }, "job transitioned");
     return true;
   } catch (err) {
     await client.query("ROLLBACK");
