@@ -97,12 +97,24 @@ PENDING -> DISPATCHED -> RUNNING -> SUCCEEDED | FAILED | TIMED_OUT
 container, which makes delivery at-least-once. Terminal states never change; a
 late result for a finished job is rejected and logged.
 
-## Failure scenarios
+## Demo and failure scenarios
 
-Reproducible demonstrations, with commands, are in
-[docs/NOTES.md](docs/NOTES.md): agent offline before dispatch, agent restart
-mid-job, orphan container cleanup, gateway restart, database restart, duplicate
-submission, and live viewer disconnection.
+An end-to-end demo covering routing, idempotency, exit codes, timeout, and live
+log streaming:
+
+```bash
+./scripts/demo.sh
+```
+
+Reproducible failure scenarios, each with exact commands and expected outcome,
+are in [scripts/failure-scenarios.md](scripts/failure-scenarios.md). Raw
+development notes with observed output are in [docs/NOTES.md](docs/NOTES.md).
+
+## Database initialization
+
+The schema is in [db/schema.sql](db/schema.sql) and is loaded once as part of
+setup. There is no migration tool; the schema is small enough that a single file
+is clearer than a migration framework for a project this size.
 
 ## Documentation
 
