@@ -66,8 +66,14 @@ async function runJob(job: any): Promise<void> {
   let timedOut = false;
 
   try {
+    
+    
+    const pullStart = Date.now();
     jobLog.info({ image: job.image }, "pulling image");
     await pullImage(job.image);
+    jobLog.info({ image: job.image, ms: Date.now() - pullStart }, "image ready");
+
+    const createStart = Date.now();
 
     const container = await docker.createContainer({
       Image: job.image,
@@ -84,37 +90,14 @@ async function runJob(job: any): Promise<void> {
 
     await container.start();
 
+    jobLog.info(
+      { containerId: container.id, ms: Date.now() - createStart },
+      "container started"
+    );
+
     attachLogs(container, job.id, jobLog);
 
-
-    // const stream: any = await container.logs({
-    //   follow: true,
-    //   stdout: true,
-    //   stderr: true,
-    // });
-
-    // stream.on("data", (chunk: Buffer) => {
-    //   let offset = 0;
-    //   while (offset + 8 <= chunk.length) {
-    //     const streamType = chunk[offset] === 2 ? "stderr" : "stdout";
-    //     const length = chunk.readUInt32BE(offset + 4);
-    //     const content = chunk
-    //       .slice(offset + 8, offset + 8 + length)
-    //       .toString("utf8");
-    //     if (content.length > 0) {
-    //       send({
-    //         type: "JOB_LOG",
-    //         jobId: job.id,
-    //         seq: seq++,
-    //         stream: streamType,
-    //         content,
-    //       });
-    //     }
-    //     offset += 8 + length;
-    //   }
-    // });
-
-    jobLog.info({ containerId: container.id }, "container started");
+    
 
     const timer = setTimeout(async () => {
       timedOut = true;
@@ -261,7 +244,14 @@ function attachLogs(container: any, jobId: string, jobLog: any, startSeq = 0) {
   );
 }
 
-function pullImage(image: string): Promise<void> {
+async function pullImage(image: string): Promise<void> {
+  try {
+    await docker.getImage(image).inspect();
+    return;
+  } catch {
+    // image not present locally, fall through and pull it
+  }
+
   return new Promise((resolve, reject) => {
     docker.pull(image, (err: any, stream: any) => {
       if (err) return reject(err);

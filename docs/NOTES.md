@@ -309,3 +309,24 @@ release is rejected by the state machine and the job stays stuck in RUNNING. Thi
 is intentional — at that point we genuinely do not know whether the work ran, and
 a stuck job a human investigates is safer than a silent re-execution that might
 duplicate side effects.
+
+### Image pull dominated job latency
+
+A trivial `echo` job took 66s, while `docker run --rm alpine:3.19 echo hi` from
+the shell completed in 0.96s — so the cost was in the agent's pull step, not in
+Docker or WSL2. Instrumenting the phases confirmed it: 66,011ms in pull, 474ms in
+container creation.
+
+`docker.pull()` contacts the registry on every call even when the image is cached
+locally, to check whether the tag has moved. On a slow connection that round trip
+dominates everything else.
+
+Fix: call `docker.getImage(image).inspect()` first and skip the pull entirely when
+the image is already present. Pull time dropped to 70ms and total job time to
+under a second.
+
+Trade-off: this trades image freshness for start latency. It is correct for pinned
+tags — the same job should produce the same environment every time — and wrong for
+mutable tags like `latest`, which is a further argument for pinning. A production
+system would expose this as a per-job pull policy, as Kubernetes does with
+Always / IfNotPresent / Never.
