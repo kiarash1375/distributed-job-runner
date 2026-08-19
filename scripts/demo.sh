@@ -5,6 +5,8 @@ set -e
 
 GW=${GATEWAY_URL:-http://localhost:8080}
 
+RUN=$(date +%s)
+
 if ! curl -sf "$GW/health" > /dev/null; then
   echo "ERROR: gateway is not reachable at $GW"
   echo "Start it with: npm run gateway"
@@ -40,7 +42,7 @@ echo "log: $(curl -s "$GW/jobs/$A/logs")"
 
 echo
 echo "== 2. routing: job for agent-b =="
-R=$(submit '{"agentId":"agent-b","image":"alpine:3.19","command":["sh","-c","echo hello from agent B"],"idempotencyKey":"demo-route-b"}')
+R=$(submit '{"agentId":"agent-b","image":"alpine:3.19","command":["sh","-c","echo hello from agent B"],"idempotencyKey":"demo-route-b-'$RUN'"}')
 B=$(job_id "$R"); echo "jobId=$B"
 echo "final state: $(wait_terminal "$B")"
 echo "log: $(curl -s "$GW/jobs/$B/logs")"
@@ -53,14 +55,14 @@ echo "$R2"
 
 echo
 echo "== 4. failing job: non-zero exit code =="
-R=$(submit '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","echo failing; exit 3"],"idempotencyKey":"demo-fail"}')
+R=$(submit '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","echo failing; exit 3"],"idempotencyKey":"demo-fail-'$RUN'"}')
 F=$(job_id "$R")
 echo "final state: $(wait_terminal "$F")"
 curl -s "$GW/jobs/$F/result"; echo
 
 echo
 echo "== 5. timeout =="
-R=$(submit '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","sleep 60"],"timeoutSeconds":5,"idempotencyKey":"demo-timeout"}')
+R=$(submit '{"agentId":"agent-a","image":"alpine:3.19","command":["sh","-c","sleep 60"],"timeoutSeconds":5,"idempotencyKey":"demo-timeout-'$RUN'"}')
 T=$(job_id "$R")
 echo "final state: $(wait_terminal "$T")"
 
